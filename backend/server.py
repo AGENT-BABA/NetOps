@@ -9,10 +9,11 @@ import logging
 import random
 import uuid
 import math
+import time
 import bcrypt
 import jwt
 from datetime import datetime, timezone, timedelta
-from typing import Optional, Literal, List
+from typing import Optional, Literal
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
@@ -87,7 +88,6 @@ RATE_MAX_REGISTER = 3
 
 
 def _check_rate(key: str, limit: int):
-    import time
     now = time.time()
     timestamps = _rate_store.get(key, [])
     timestamps = [t for t in timestamps if now - t < RATE_WINDOW]
@@ -1097,7 +1097,7 @@ async def worker_complete(ticket_id: str, user: dict = Depends(require_role("wor
 # ---------------- User (Client) ----------------
 @api.get("/user/routers")
 async def user_routers(user: dict = Depends(require_role("user"))):
-    return await db.routers.find({"user_id": user["id"]}, {"_id": 0}).to_list(length=50)
+    return await db.routers.find({"user_id": user["id"]}, {"_id": 0, "admin_password": 0}).to_list(length=50)
 
 
 @api.post("/user/routers")
@@ -1121,7 +1121,7 @@ async def user_create_router(body: CreateRouterIn, user: dict = Depends(require_
         "router_ip": body.router_ip, "wan_ip": body.wan_ip or "",
         "mac_address": body.mac_address or "",
         "admin_username": body.admin_username,
-        "admin_password": body.admin_password,
+        "admin_password": encrypt_secret(body.admin_password) if body.admin_password else "",
         "serial_number": body.serial_number or "",
         "status": "online", "signal": None, "issue_type": None,
         "detection_status": "manual",
@@ -1279,7 +1279,7 @@ async def user_register_router(body: RegisterRouterIn, user: dict = Depends(requ
         "wan_ip": body.wan_ip or "",
         "mac_address": body.mac_address or "",
         "admin_username": body.admin_username,
-        "admin_password": body.admin_password,
+        "admin_password": encrypt_secret(body.admin_password) if body.admin_password else "",
         "serial_number": body.serial_number or "",
         "detection_status": "manual",
     }
@@ -1324,7 +1324,6 @@ async def user_router_health_history(
     if not router:
         raise HTTPException(404, "Router not found")
 
-    from datetime import timedelta
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     logs = await db.router_health.find(
         {"router_id": router_id, "timestamp": {"$gte": cutoff}},
@@ -1367,7 +1366,6 @@ async def dealer_router_health_history(
     if not router:
         raise HTTPException(404, "Router not found")
 
-    from datetime import timedelta
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     logs = await db.router_health.find(
         {"router_id": router_id, "timestamp": {"$gte": cutoff}},
@@ -1395,22 +1393,7 @@ async def health():
 
 # ---------------- SEED ----------------
 async def seed():
-    await db.users.create_index("email", unique=True)
-    await db.users.create_index("id", unique=True)
-    await db.users.create_index([("role", 1), ("dealer_id", 1)])
-    await db.users.create_index("dealer_code", sparse=True)
-    await db.routers.create_index("id", unique=True)
-    await db.routers.create_index("router_id", unique=True)
-    await db.routers.create_index("dealer_id")
-    await db.routers.create_index("user_id")
-    await db.tickets.create_index("id", unique=True)
-    await db.tickets.create_index("dealer_id")
-    await db.tickets.create_index("worker_id")
-    await db.tickets.create_index("user_id")
-    await db.notifications.create_index("user_id")
-    await db.router_health.create_index("router_id")
-    await db.router_health.create_index("timestamp")
-
+    # Indexes are created in ensure_indexes() on startup
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@netops.io")
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
     existing_admin = await db.users.find_one({"email": admin_email})
@@ -1421,12 +1404,6 @@ async def seed():
             "phone": "", "active": True, "created_at": now_iso(),
         })
         log.info(f"Seeded admin: {admin_email}")
-    else:
-        # Keep password in sync with .env
-        if not verify_pw(admin_password, existing_admin["password_hash"]):
-            await db.users.update_one({"email": admin_email},
-                                      {"$set": {"password_hash": hash_pw(admin_password)}})
-            log.info(f"Updated admin password for: {admin_email}")
 
 
 @app.on_event("startup")
@@ -1465,8 +1442,8 @@ app.include_router(api)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=os.environ.get("CORS_ORIGINS", "").split(",") if os.environ.get("CORS_ORIGINS") else ["http://localhost:3000"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )

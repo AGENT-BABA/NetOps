@@ -6,8 +6,6 @@ secrets, profiles, queues, and interface stats.
 
 import logging
 import asyncio
-from datetime import datetime, timezone
-from typing import Optional
 
 log = logging.getLogger("netops.mikrotik")
 

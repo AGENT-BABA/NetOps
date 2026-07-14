@@ -5,6 +5,7 @@ test_reports
 memory
 *.md
 .env
+**/.env
 __pycache__
 .pytest_cache
 .emergent

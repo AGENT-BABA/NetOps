@@ -96,6 +96,17 @@ def check_tp_link(router_doc: dict) -> dict:
     password = router_doc.get("admin_password", "")
     username = router_doc.get("admin_username", "admin")
 
+    # Decrypt password if it's encrypted (Fernet tokens start with "gAAAAA")
+    if password and password.startswith("gAAAAA"):
+        try:
+            from cryptography.fernet import Fernet
+            import os
+            key = os.environ.get("ENCRYPTION_KEY", "")
+            if key:
+                password = Fernet(key.encode()).decrypt(password.encode()).decode()
+        except Exception:
+            pass
+
     if not router_ip or not password:
         return {
             "status": "unknown", "wan_status": "unknown", "wan_ip": None,
