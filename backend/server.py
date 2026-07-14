@@ -14,6 +14,7 @@ import jwt
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Literal, List
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Query
+from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
@@ -363,6 +364,187 @@ async def admin_daily_report_by_date(date: str, _: dict = Depends(require_role("
     """Get all router reports for a specific date (YYYY-MM-DD)."""
     reports = await db.daily_reports.find({"date": date}, {"_id": 0}).to_list(length=200)
     return reports
+
+
+# ---------------- Monthly Reports ----------------
+def _month_range(month: str):
+    """Return (start, end) date strings for a YYYY-MM month."""
+    year, mon = map(int, month.split("-"))
+    start = f"{year:04d}-{mon:02d}-01"
+    if mon == 12:
+        end = f"{year + 1:04d}-01-01"
+    else:
+        end = f"{year:04d}-{mon + 1:02d}-01"
+    return start, end
+
+
+@api.get("/admin/reports/monthly")
+async def admin_monthly_summary(month: str = Query(..., description="YYYY-MM"), _: dict = Depends(require_role("admin"))):
+    """Aggregated monthly health summary per router."""
+    start, end = _month_range(month)
+    q = {"date": {"$gte": start, "$lt": end}}
+    reports = await db.daily_reports.find(q, {"_id": 0}).to_list(length=1000)
+    if not reports:
+        return {"month": month, "routers": [], "totals": {}}
+
+    by_router = {}
+    for r in reports:
+        rid = r["router_id"]
+        if rid not in by_router:
+            by_router[rid] = {"router_id": rid, "days": 0, "total_checks": 0, "up_count": 0, "down_count": 0, "latencies": []}
+        br = by_router[rid]
+        br["days"] += 1
+        br["total_checks"] += r.get("total_checks", 0)
+        br["up_count"] += r.get("up_count", 0)
+        br["down_count"] += r.get("down_count", 0)
+        if r.get("avg_latency_ms") is not None:
+            br["latencies"].append(r["avg_latency_ms"])
+
+    routers = []
+    total_checks = total_up = total_down = 0
+    for br in by_router.values():
+        uptime = round(br["up_count"] / br["total_checks"] * 100, 2) if br["total_checks"] else 0
+        avg_lat = round(sum(br["latencies"]) / len(br["latencies"]), 2) if br["latencies"] else None
+        routers.append({
+            "router_id": br["router_id"],
+            "days": br["days"],
+            "total_checks": br["total_checks"],
+            "up_count": br["up_count"],
+            "down_count": br["down_count"],
+            "uptime_pct": uptime,
+            "avg_latency_ms": avg_lat,
+        })
+        total_checks += br["total_checks"]
+        total_up += br["up_count"]
+        total_down += br["down_count"]
+
+    return {
+        "month": month,
+        "routers": routers,
+        "totals": {
+            "total_checks": total_checks,
+            "up_count": total_up,
+            "down_count": total_down,
+            "uptime_pct": round(total_up / total_checks * 100, 2) if total_checks else 0,
+        },
+    }
+
+
+@api.get("/admin/reports/monthly/pdf")
+async def admin_monthly_pdf(month: str = Query(..., description="YYYY-MM"), _: dict = Depends(require_role("admin"))):
+    """Generate and download a monthly health report PDF."""
+    from io import BytesIO
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
+    start, end = _month_range(month)
+    q = {"date": {"$gte": start, "$lt": end}}
+    reports = await db.daily_reports.find(q, {"_id": 0}).sort("date", 1).to_list(length=1000)
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=20 * mm, bottomMargin=20 * mm)
+    styles = getSampleStyleSheet()
+    elements = []
+
+    title_style = ParagraphStyle("Title2", parent=styles["Title"], fontSize=18, spaceAfter=6)
+    subtitle_style = ParagraphStyle("Sub", parent=styles["Normal"], fontSize=10, textColor=colors.grey, spaceAfter=12)
+    elements.append(Paragraph(f"NetOps — Monthly Health Report", title_style))
+    elements.append(Paragraph(f"Period: {month} &nbsp;|&nbsp; Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}", subtitle_style))
+
+    if not reports:
+        elements.append(Paragraph("No data available for this month.", styles["Normal"]))
+    else:
+        # Build per-router summary
+        by_router = {}
+        for r in reports:
+            rid = r["router_id"]
+            if rid not in by_router:
+                by_router[rid] = {"days": 0, "checks": 0, "up": 0, "down": 0, "lats": []}
+            br = by_router[rid]
+            br["days"] += 1
+            br["checks"] += r.get("total_checks", 0)
+            br["up"] += r.get("up_count", 0)
+            br["down"] += r.get("down_count", 0)
+            if r.get("avg_latency_ms") is not None:
+                br["lats"].append(r["avg_latency_ms"])
+
+        # Summary table
+        elements.append(Paragraph("Router Summary", styles["Heading2"]))
+        sum_data = [["Router ID", "Days", "Checks", "Up", "Down", "Uptime %", "Avg Latency"]]
+        for rid, br in sorted(by_router.items()):
+            uptime = f"{br['up'] / br['checks'] * 100:.1f}%" if br["checks"] else "—"
+            avg_lat = f"{sum(br['lats']) / len(br['lats']):.1f}ms" if br["lats"] else "—"
+            sum_data.append([rid, str(br["days"]), str(br["checks"]), str(br["up"]), str(br["down"]), uptime, avg_lat])
+
+        t = Table(sum_data, repeatRows=1)
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a1a2e")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f5f5")]),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        elements.append(t)
+        elements.append(Spacer(1, 16))
+
+        # Daily breakdown per router
+        for rid in sorted(by_router.keys()):
+            elements.append(Paragraph(f"Daily Breakdown — {rid}", styles["Heading2"]))
+            daily = [r for r in reports if r["router_id"] == rid]
+            tbl_data = [["Date", "Checks", "Up", "Down", "Uptime %", "Avg Lat", "Min Lat", "Max Lat"]]
+            for r in daily:
+                tbl_data.append([
+                    r["date"],
+                    str(r.get("total_checks", 0)),
+                    str(r.get("up_count", 0)),
+                    str(r.get("down_count", 0)),
+                    f"{r.get('uptime_pct', 0)}%",
+                    f"{r.get('avg_latency_ms', '—')}" + ("ms" if r.get("avg_latency_ms") else ""),
+                    f"{r.get('min_latency_ms', '—')}" + ("ms" if r.get("min_latency_ms") else ""),
+                    f"{r.get('max_latency_ms', '—')}" + ("ms" if r.get("max_latency_ms") else ""),
+                ])
+            dt = Table(tbl_data, repeatRows=1)
+            dt.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a1a2e")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTSIZE", (0, 0), (-1, -1), 7),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f5f5")]),
+                ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]))
+            elements.append(dt)
+            elements.append(Spacer(1, 12))
+
+    doc.build(elements)
+    buf.seek(0)
+    filename = f"netops-health-report-{month}.pdf"
+    return StreamingResponse(
+        buf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@api.delete("/admin/reports/monthly")
+async def admin_delete_monthly_reports(month: str = Query(..., description="YYYY-MM"), request: Request = None, user: dict = Depends(require_role("admin"))):
+    """Delete daily reports and health logs for a given month."""
+    start, end = _month_range(month)
+    dr = await db.daily_reports.delete_many({"date": {"$gte": start, "$lt": end}})
+    hl = await db.router_health.delete_many({"timestamp": {"$gte": f"{start}T00:00:00", "$lt": f"{end}T00:00:00"}})
+    await log_action(user, "delete_monthly_reports", f"Month: {month}, Reports: {dr.deleted_count}, Logs: {hl.deleted_count}", request, True)
+    return {"deleted_reports": dr.deleted_count, "deleted_logs": hl.deleted_count}
 
 
 @api.get("/admin/analytics")

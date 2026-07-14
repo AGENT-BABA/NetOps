@@ -394,19 +394,19 @@ async def consolidate_daily_reports(db):
     yesterday_end = yesterday_start + timedelta(days=1)
 
     pipeline = [
-        {"$match": {"checked_at": {"$gte": yesterday_start.isoformat(), "$lt": yesterday_end.isoformat()}}},
+        {"$match": {"timestamp": {"$gte": yesterday_start.isoformat(), "$lt": yesterday_end.isoformat()}}},
         {"$group": {
             "_id": "$router_id",
             "checks": {"$sum": 1},
-            "up_count": {"$sum": {"$cond": [{"$eq": ["$status", "up"]}, 1, 0]}},
-            "down_count": {"$sum": {"$cond": [{"$eq": ["$status", "down"]}, 1, 0]}},
+            "up_count": {"$sum": {"$cond": [{"$eq": ["$status", "online"]}, 1, 0]}},
+            "down_count": {"$sum": {"$cond": [{"$eq": ["$status", "offline"]}, 1, 0]}},
             "avg_latency": {"$avg": "$latency_ms"},
             "min_latency": {"$min": "$latency_ms"},
             "max_latency": {"$max": "$latency_ms"},
         }},
     ]
 
-    results = await db.health_logs.aggregate(pipeline).to_list(length=500)
+    results = await db.router_health.aggregate(pipeline).to_list(length=500)
     date_str = yesterday_start.strftime("%Y-%m-%d")
 
     for r in results:
