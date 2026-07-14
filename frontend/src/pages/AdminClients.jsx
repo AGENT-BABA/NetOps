@@ -162,7 +162,7 @@ export default function AdminClients() {
                   <TableCell className="text-xs">{c.phone}</TableCell>
                   <TableCell className="text-xs">
                     {c.dealer_id ? (
-                      <Badge variant="secondary" className="font-label text-[9px]">Assigned</Badge>
+                      <Badge variant="secondary" className="font-label text-[9px]">{c.dealer_code || "Unknown"}</Badge>
                     ) : (
                       <Button
                         variant="outline"

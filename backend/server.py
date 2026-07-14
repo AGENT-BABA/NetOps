@@ -957,6 +957,14 @@ async def admin_all_clients(_: dict = Depends(require_role("admin"))):
         {"_id": 0, "password_hash": 0},
     ).to_list(length=1000)
 
+    # Attach dealer info
+    dealer_ids = list(set(c.get("dealer_id") for c in clients if c.get("dealer_id")))
+    dealers = await db.users.find(
+        {"id": {"$in": dealer_ids}},
+        {"_id": 0, "id": 1, "dealer_code": 1, "name": 1}
+    ).to_list(length=500)
+    dealer_map = {d["id"]: d for d in dealers}
+
     # Attach router info
     client_ids = [c["id"] for c in clients]
     routers = await db.routers.find(
@@ -966,6 +974,14 @@ async def admin_all_clients(_: dict = Depends(require_role("admin"))):
     router_map = {r["user_id"]: r for r in routers}
 
     for c in clients:
+        did = c.get("dealer_id")
+        if did and did in dealer_map:
+            c["dealer_code"] = dealer_map[did].get("dealer_code", "")
+            c["dealer_name"] = dealer_map[did].get("name", "")
+        else:
+            c["dealer_code"] = None
+            c["dealer_name"] = None
+
         r = router_map.get(c["id"])
         if r:
             c["router_assigned"] = True
