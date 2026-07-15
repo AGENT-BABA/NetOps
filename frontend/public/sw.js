@@ -1,11 +1,8 @@
-/* NetOps Service Worker · v2
+/* NetOps Service Worker · v3
  * Enables install as PWA + offline fallback support.
- * Push notifications from the app itself are triggered via the Notification API
- * (see src/lib/notify.js). This SW receives forwarded messages from the page
- * (via postMessage) and shows them via registration.showNotification so that
- * they appear in the OS notification tray even if the tab is inactive.
+ * Handles FCM push notifications + forwarded in-app notifications.
  */
-const CACHE = "netops-v2";
+const CACHE = "netops-v3";
 const APP_SHELL = ["/", "/index.html", "/manifest.json", "/icon-192.png", "/icon-512.png", "/offline.html"];
 
 self.addEventListener("install", (event) => {
@@ -61,6 +58,32 @@ self.addEventListener("fetch", (event) => {
         })
         .catch(() => cached)
     )
+  );
+});
+
+// FCM push notifications — fired when app is closed/backgrounded
+self.addEventListener("push", (event) => {
+  if (!event.data) return;
+  let payload;
+  try {
+    payload = event.data.json();
+  } catch {
+    payload = { notification: { title: "NetOps", body: event.data.text() } };
+  }
+
+  const title = payload.notification?.title || payload.data?.title || "NetOps";
+  const body = payload.notification?.body || payload.data?.body || "";
+  const tag = payload.notification?.tag || payload.data?.tag || "netops-push";
+
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+      tag,
+      data: payload.data || {},
+      renotify: true,
+    })
   );
 });
 

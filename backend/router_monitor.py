@@ -344,6 +344,13 @@ async def _check_one_router(db, router: dict, semaphore: asyncio.Semaphore):
                         "read": False,
                         "created_at": datetime.now(timezone.utc).isoformat(),
                     })
+                    from backend.server import send_push_notification
+                    await send_push_notification(
+                        router["dealer_id"],
+                        f"Router {new_status.upper()}",
+                        f"Router {router_id} ({router.get('client_name', 'Unknown')}) is {new_status}.",
+                        _db=db,
+                    )
 
             return True
         except Exception as e:
@@ -500,6 +507,13 @@ async def run_pppoe_health_checks(db):
                     "read": False,
                     "created_at": now.isoformat(),
                 })
+                from backend.server import send_push_notification
+                await send_push_notification(
+                    router["dealer_id"],
+                    "Router OFFLINE",
+                    f"PPPoE user {pppoe_name} ({router.get('client_name', 'Unknown')}) went offline. Possible wire cut.",
+                    _db=mongo_db,
+                )
             if router.get("user_id"):
                 await mongo_db.notifications.insert_one({
                     "id": str(uuid.uuid4()),
@@ -511,6 +525,13 @@ async def run_pppoe_health_checks(db):
                     "read": False,
                     "created_at": now.isoformat(),
                 })
+                from backend.server import send_push_notification as _spn
+                await _spn(
+                    router["user_id"],
+                    "Connection Offline",
+                    f"Your internet connection ({pppoe_name}) is offline. If this persists, report an issue.",
+                    _db=mongo_db,
+                )
             status_changes += 1
 
         checked += 1

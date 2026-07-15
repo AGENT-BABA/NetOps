@@ -8,6 +8,7 @@ import {
   notificationsSupported, notificationPermission,
   requestNotificationPermission, NOTIF_ENABLED_KEY,
 } from "@/lib/notify";
+import { initFCM } from "@/lib/fcm";
 import { toast } from "sonner";
 
 export function NotifyToggle() {
@@ -28,6 +29,7 @@ export function NotifyToggle() {
         localStorage.setItem(NOTIF_ENABLED_KEY, "on");
         setEnabled(true);
         toast.success("Push notifications enabled");
+        initFCM();
       } else if (p === "denied") {
         toast.error("Notifications blocked. Enable them from your browser site settings.");
       }
@@ -42,6 +44,7 @@ export function NotifyToggle() {
     setEnabled(next);
     localStorage.setItem(NOTIF_ENABLED_KEY, next ? "on" : "off");
     toast(next ? "Push notifications ON" : "Push notifications OFF");
+    if (next) initFCM();
   };
 
   const active = perm === "granted" && enabled;

@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@/index.css";
 import App from "@/App";
 import { registerServiceWorker } from "@/lib/notify";
+import { initFCM } from "@/lib/fcm";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -12,7 +13,10 @@ const queryClient = new QueryClient({
 });
 
 function Root() {
-  useEffect(() => { registerServiceWorker(); }, []);
+  useEffect(() => {
+    registerServiceWorker();
+    initFCM();
+  }, []);
   return (
     <QueryClientProvider client={queryClient}>
       <App />

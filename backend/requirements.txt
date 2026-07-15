@@ -13,3 +13,4 @@ python-multipart>=0.0.9
 tplinkrouterc6u>=5.23.0
 routeros-api==0.21.0
 reportlab>=4.0
+firebase-admin>=6.5.0

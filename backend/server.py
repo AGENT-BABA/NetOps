@@ -21,6 +21,77 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
 import asyncio
 import io
+
+# ---------------- Firebase Admin (FCM) ----------------
+_firebase_app = None
+
+def _get_firebase_app():
+    global _firebase_app
+    if _firebase_app is None:
+        try:
+            import firebase_admin
+            from firebase_admin import credentials
+            sa_path = os.environ.get("FIREBASE_SERVICE_ACCOUNT_PATH", "firebase-service-account.json")
+            sa_full = str(Path(__file__).parent / sa_path)
+            if os.path.exists(sa_full):
+                cred = credentials.Certificate(sa_full)
+                _firebase_app = firebase_admin.initialize_app(cred)
+                log.info("Firebase Admin initialized for FCM")
+            else:
+                log.warning(f"Firebase service account not found at {sa_full}, FCM push disabled")
+        except Exception as e:
+            log.warning(f"Firebase Admin init failed: {e}")
+    return _firebase_app
+
+
+async def send_push_notification(user_id: str, title: str, body: str, _db=None):
+    """Send FCM push notification to a user's registered devices."""
+    try:
+        app = _get_firebase_app()
+        if not app:
+            return
+
+        from firebase_admin import messaging
+
+        target_db = _db or db
+        tokens_doc = await target_db.fcm_tokens.find_one({"user_id": user_id})
+        if not tokens_doc:
+            return
+
+        tokens = tokens_doc.get("tokens", [])
+        if not tokens:
+            return
+
+        # Deduplicate tokens
+        unique_tokens = list(set(tokens))
+
+        message = messaging.MulticastMessage(
+            notification=messaging.Notification(title=title, body=body),
+            tokens=unique_tokens,
+            webpush=messaging.WebpushConfig(
+                notification=messaging.WebpushNotification(
+                    icon="/icon-192.png",
+                    badge="/icon-192.png",
+                ),
+                fcm_options=messaging.WebpushFCMOptions(uri="/"),
+            ),
+        )
+
+        response = messaging.send_each_for_multicast(message)
+
+        # Remove invalid tokens
+        if response.failure_count > 0:
+            failed_tokens = []
+            for i, resp in enumerate(response.responses):
+                if not resp.success:
+                    failed_tokens.append(unique_tokens[i])
+            if failed_tokens:
+                await target_db.fcm_tokens.update_one(
+                    {"user_id": user_id},
+                    {"$pull": {"tokens": {"$in": failed_tokens}}}
+                )
+    except Exception as e:
+        log.warning(f"FCM push failed for user {user_id}: {e}")
 from backend.router_monitor import (
     check_router_health, save_health_log, update_router_snapshot,
     run_health_checks, check_single_router, start_health_scheduler,
@@ -799,6 +870,7 @@ async def admin_assign_client(client_id: str, body: AssignClientIn, _: dict = De
         "message": f"Admin assigned client {client['name']} to you.",
         "read": False, "created_at": now_iso(),
     })
+    await send_push_notification(body.dealer_id, "Client Assigned", f"Admin assigned client {client['name']} to you.")
     return {"ok": True}
 
 
@@ -915,6 +987,7 @@ async def admin_assign_router_confirm(body: dict, request: Request, user: dict =
         "read": False,
         "created_at": now,
     })
+    await send_push_notification(client_id, "Router Assigned", f"Admin has assigned your internet connection ({pppoe_username}).")
 
     await log_action(user, "assign_router", f"Client: {client['name']}, PPPoE: {pppoe_username}", request)
     return {"ok": True, "router_id": rid}
@@ -944,6 +1017,7 @@ async def admin_unassign_router(router_id: str, request: Request, user: dict = D
             "read": False,
             "created_at": now_iso(),
         })
+        await send_push_notification(client_id, "Router Removed", f"Admin has removed your internet connection ({pppoe_username}).")
 
     await log_action(user, "unassign_router", f"Router: {router_id}, PPPoE: {pppoe_username}", request)
     return {"ok": True, "deleted": router_id}
@@ -1189,6 +1263,7 @@ async def dealer_assign_ticket(ticket_id: str, body: AssignTicketIn, user: dict 
         "message": f"You've been assigned to {ticket['ticket_number']} — {ticket['issue_type'].replace('_', ' ')} at {ticket['location']}",
         "read": False, "created_at": now_iso(),
     })
+    await send_push_notification(worker["id"], "New Assignment", f"You've been assigned to {ticket['ticket_number']} — {ticket['issue_type'].replace('_', ' ')} at {ticket['location']}")
     return {"ok": True}
 
 
@@ -1276,6 +1351,7 @@ async def worker_complete(ticket_id: str, user: dict = Depends(require_role("wor
         "message": f"Your connection ({t['router_id']}) has been restored by {user['name']}. Please confirm & submit feedback.",
         "read": False, "created_at": now_iso(),
     })
+    await send_push_notification(t["user_id"], "Connection Restored", f"Your connection ({t['router_id']}) has been restored by {user['name']}.")
     # Notify dealer
     await db.notifications.insert_one({
         "id": str(uuid.uuid4()), "user_id": t["dealer_id"], "ticket_id": ticket_id,
@@ -1283,10 +1359,25 @@ async def worker_complete(ticket_id: str, user: dict = Depends(require_role("wor
         "message": f"{user['name']} completed {t['ticket_number']} ({t['client_name']}).",
         "read": False, "created_at": now_iso(),
     })
+    await send_push_notification(t["dealer_id"], "Job Completed", f"{user['name']} completed {t['ticket_number']} ({t['client_name']}).")
     return {"ok": True}
 
 
 # ---------------- User (Client) ----------------
+class FcmTokenIn(BaseModel):
+    token: str
+
+@api.post("/user/fcm-token")
+async def save_fcm_token(body: FcmTokenIn, user: dict = Depends(current_user)):
+    """Save FCM push token for a user. Allows multiple devices."""
+    await db.fcm_tokens.update_one(
+        {"user_id": user["id"]},
+        {"$addToSet": {"tokens": body.token}},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
 @api.get("/user/routers")
 async def user_routers(user: dict = Depends(require_role("user"))):
     """Get user's routers with live PPPoE status from MikroTik."""
@@ -1412,6 +1503,7 @@ async def user_report_issue(body: ReportIssueIn, user: dict = Depends(require_ro
             "message": f"{user['name']} reported {body.issue_type.replace('_', ' ')} at {router['location']}",
             "read": False, "created_at": now_iso(),
         })
+        await send_push_notification(user["dealer_id"], "New Client Report", f"{user['name']} reported {body.issue_type.replace('_', ' ')} at {router['location']}")
     return {"ticket_number": tnum, "id": tid}
 
 
@@ -1450,6 +1542,9 @@ async def user_feedback(ticket_id: str, body: FeedbackIn, user: dict = Depends(r
             "message": f"{user['name']}: {'Working ✓' if body.working else 'Not working — ' + (body.reason or 'no reason')}",
             "read": False, "created_at": now_iso(),
         })
+        _title = "Feedback Received" if body.working else "Ticket Reopened"
+        _msg = f"{user['name']}: {'Working' if body.working else 'Not working — ' + (body.reason or 'no reason')}"
+        await send_push_notification(t["dealer_id"], _title, _msg)
     return {"ok": True}
 
 
@@ -1473,6 +1568,7 @@ async def user_delete_ticket(ticket_id: str, body: TicketDeleteIn, user: dict = 
             "message": f"{user['name']} deleted ticket {t['ticket_number']}. Reason: {body.reason}",
             "read": False, "created_at": now_iso(),
         })
+        await send_push_notification(t["dealer_id"], "Ticket Deleted by Client", f"{user['name']} deleted ticket {t['ticket_number']}.")
     # Delete ticket and its related notifications
     await db.tickets.delete_one({"id": ticket_id})
     await db.notifications.delete_many({"ticket_id": ticket_id})
