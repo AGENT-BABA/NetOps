@@ -420,7 +420,7 @@ async def run_pppoe_health_checks(db):
         host = config["host"]
         port = config["port"]
         username = config["username"]
-        use_ssl = config.get("use_ssl", True)
+        use_ssl = config.get("use_ssl", False)
     except Exception as e:
         log.error(f"Failed to load MikroTik config for PPPoE checks: {e}")
         return

@@ -1078,7 +1078,7 @@ async def _get_mikrotik_config():
     if not config:
         raise HTTPException(400, "MikroTik not configured. Save config first.")
     password = decrypt_secret(config.get("password_encrypted", ""))
-    return config["host"], config["port"], config["username"], password, config.get("use_ssl", True)
+    return config["host"], config["port"], config["username"], password, config.get("use_ssl", False)
 @api.post("/admin/mikrotik/config")
 async def save_mikrotik_config(body: MikroTikConfigIn, request: Request, user: dict = Depends(require_role("admin"))):
     """Save MikroTik CCR connection config."""

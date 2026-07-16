@@ -9,34 +9,33 @@ import asyncio
 
 log = logging.getLogger("netops.mikrotik")
 
-# Default timeout for API calls
-DEFAULT_TIMEOUT = 10
-
-
 def _run_sync(func, *args, **kwargs):
     """Run a blocking RouterOS API call in a thread executor."""
     loop = asyncio.get_event_loop()
     return loop.run_in_executor(None, lambda: func(*args, **kwargs))
 
 
-def _connect(host: str, port: int, username: str, password: str, use_ssl: bool = True):
+def _connect(host: str, port: int, username: str, password: str, use_ssl: bool = False):
     """Create a RouterOS API connection. Returns the connection object."""
     import routeros_api
-    proto = "api-ssl" if use_ssl else "api"
-    connection = routeros_api.RouterOsApiPool(
+    kwargs = dict(
         host=host,
         port=port,
         username=username,
         password=password,
         plaintext_login=True,
-        ssl_certificate_verify=False,
+        use_ssl=use_ssl,
     )
+    if use_ssl:
+        kwargs["ssl_verify"] = False
+        kwargs["ssl_verify_hostname"] = False
+    connection = routeros_api.RouterOsApiPool(**kwargs)
     return connection
 
 
 # ---------- Public async functions ----------
 
-async def test_connection(host: str, port: int, username: str, password: str, use_ssl: bool = True) -> dict:
+async def test_connection(host: str, port: int, username: str, password: str, use_ssl: bool = False) -> dict:
     """Test connection to MikroTik router. Returns status info."""
     try:
         def _do():
@@ -60,7 +59,7 @@ async def test_connection(host: str, port: int, username: str, password: str, us
         return {"connected": False, "error": str(e)[:200]}
 
 
-async def get_pppoe_sessions(host: str, port: int, username: str, password: str, use_ssl: bool = True) -> list:
+async def get_pppoe_sessions(host: str, port: int, username: str, password: str, use_ssl: bool = False) -> list:
     """Get all active PPPoE sessions."""
     try:
         def _do():
@@ -77,7 +76,7 @@ async def get_pppoe_sessions(host: str, port: int, username: str, password: str,
         return []
 
 
-async def get_pppoe_secrets(host: str, port: int, username: str, password: str, use_ssl: bool = True) -> list:
+async def get_pppoe_secrets(host: str, port: int, username: str, password: str, use_ssl: bool = False) -> list:
     """Get all configured PPPoE secrets (users)."""
     try:
         def _do():
@@ -94,7 +93,7 @@ async def get_pppoe_secrets(host: str, port: int, username: str, password: str, 
         return []
 
 
-async def get_profiles(host: str, port: int, username: str, password: str, use_ssl: bool = True) -> list:
+async def get_profiles(host: str, port: int, username: str, password: str, use_ssl: bool = False) -> list:
     """Get all PPPoE profiles."""
     try:
         def _do():
@@ -111,7 +110,7 @@ async def get_profiles(host: str, port: int, username: str, password: str, use_s
         return []
 
 
-async def get_interfaces(host: str, port: int, username: str, password: str, use_ssl: bool = True) -> list:
+async def get_interfaces(host: str, port: int, username: str, password: str, use_ssl: bool = False) -> list:
     """Get all interfaces with traffic stats."""
     try:
         def _do():
@@ -128,7 +127,7 @@ async def get_interfaces(host: str, port: int, username: str, password: str, use
         return []
 
 
-async def get_dhcp_leases(host: str, port: int, username: str, password: str, use_ssl: bool = True) -> list:
+async def get_dhcp_leases(host: str, port: int, username: str, password: str, use_ssl: bool = False) -> list:
     """Get DHCP lease table."""
     try:
         def _do():
@@ -145,7 +144,7 @@ async def get_dhcp_leases(host: str, port: int, username: str, password: str, us
         return []
 
 
-async def get_simple_queues(host: str, port: int, username: str, password: str, use_ssl: bool = True) -> list:
+async def get_simple_queues(host: str, port: int, username: str, password: str, use_ssl: bool = False) -> list:
     """Get simple queues (bandwidth limits)."""
     try:
         def _do():
@@ -163,7 +162,7 @@ async def get_simple_queues(host: str, port: int, username: str, password: str, 
 
 
 async def disconnect_client(host: str, port: int, username: str, password: str,
-                            session_id: str, use_ssl: bool = True) -> dict:
+                            session_id: str, use_ssl: bool = False) -> dict:
     """Disconnect an active PPPoE session by .id."""
     try:
         def _do():
@@ -180,7 +179,7 @@ async def disconnect_client(host: str, port: int, username: str, password: str,
 
 
 async def enable_disable_client(host: str, port: int, username: str, password: str,
-                                secret_id: str, disabled: bool, use_ssl: bool = True) -> dict:
+                                secret_id: str, disabled: bool, use_ssl: bool = False) -> dict:
     """Enable or disable a PPPoE secret (user)."""
     try:
         def _do():
@@ -198,7 +197,7 @@ async def enable_disable_client(host: str, port: int, username: str, password: s
 
 
 async def change_client_profile(host: str, port: int, username: str, password: str,
-                                secret_id: str, new_profile: str, use_ssl: bool = True) -> dict:
+                                secret_id: str, new_profile: str, use_ssl: bool = False) -> dict:
     """Change the PPPoE profile for a secret (user)."""
     try:
         def _do():
@@ -215,7 +214,7 @@ async def change_client_profile(host: str, port: int, username: str, password: s
 
 
 async def get_client_usage(host: str, port: int, username: str, password: str,
-                           use_ssl: bool = True) -> dict:
+                           use_ssl: bool = False) -> dict:
     """Get traffic stats per active PPPoE session."""
     try:
         def _do():
