@@ -29,7 +29,6 @@ def _connect(host: str, port: int, username: str, password: str, use_ssl: bool =
         username=username,
         password=password,
         plaintext_login=True,
-        timeout=DEFAULT_TIMEOUT,
         ssl_certificate_verify=False,
     )
     return connection
