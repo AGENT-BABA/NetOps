@@ -11,7 +11,7 @@ import { Wifi, WifiOff, Save, TestTube2, CheckCircle2, XCircle } from "lucide-re
 import { toast } from "sonner";
 
 export default function AdminSettings() {
-  const [config, setConfig] = useState({ host: "", port: "8729", username: "", password: "", use_ssl: true });
+  const [config, setConfig] = useState({ host: "", port: "8728", username: "", password: "", use_ssl: false });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -22,7 +22,7 @@ export default function AdminSettings() {
       try {
         const { data } = await api.get("/admin/mikrotik/config");
         if (data.configured) {
-          setConfig({ host: data.host || "", port: String(data.port || "8729"), username: data.username || "", password: "", use_ssl: data.use_ssl !== false });
+          setConfig({ host: data.host || "", port: String(data.port || "8728"), username: data.username || "", password: "", use_ssl: data.use_ssl === true });
         }
       } catch (e) { toast.error(apiErrorMessage(e)); }
       finally { setLoading(false); }

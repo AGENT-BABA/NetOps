@@ -328,10 +328,10 @@ class CreateRouterIn(BaseModel):
 
 class MikroTikConfigIn(BaseModel):
     host: str  # Router IP e.g. "192.168.88.1"
-    port: int = 8729  # API-SSL port
+    port: int = 8728  # API port (8728=no SSL, 8729=SSL)
     username: str  # Dedicated API user (not admin)
     password: str
-    use_ssl: bool = True
+    use_ssl: bool = False
 
 
 # ---------------- Auth ----------------
